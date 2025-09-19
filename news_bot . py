@@ -1,72 +1,100 @@
 import requests
-import time
-import logging
-from config import TELEGRAM_TOKEN, CHAT_ID, NEWS_API
+import yfinance as yf
+import pandas as pd
+import pandas_ta as ta
+from googletrans import Translator
+from config import TOKEN, CHAT_ID, TICKERS
 
-logging.basicConfig(level=logging.INFO)
+BASE_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+translator = Translator()
 
-# إرسال رسالة لتليجرام
-def send_message(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
+def send_message(msg):
+    requests.post(BASE_URL, data={"chat_id": CHAT_ID, "text": msg})
+
+def translate_text(text):
     try:
-        r = requests.post(url, data=data)
-        if r.status_code != 200:
-            logging.error(f"خطأ في الإرسال: {r.text}")
-    except Exception as e:
-        logging.error(f"استثناء في الإرسال: {e}")
+        return translator.translate(text, src="en", dest="ar").text
+    except:
+        return text
 
-# جلب الأخبار من NewsAPI وترجمتها
-def get_stock_news():
-    try:
-        r = requests.get(NEWS_API)
-        articles = r.json().get("articles", [])
-        news_list = []
-        for a in articles[:3]:  # آخر 3 أخبار
-            title = a.get("title", "")
-            url = a.get("url", "")
-            source = a.get("source", {}).get("name", "")
-            news_list.append(f"📰 <b>{title}</b>\n📌 المصدر: {source}\n🔗 {url}")
-        return news_list
-    except Exception as e:
-        logging.error(f"خطأ في جلب الأخبار: {e}")
-        return []
-
-# أسهم متحركة (أمثلة، ممكن تربطها بـ API السوق)
-def get_movers():
-    movers = [
-        {"symbol": "AAPL", "price": 180.5, "support": 178, "resistance": 182, "targets": [185, 190]},
-        {"symbol": "TSLA", "price": 255.2, "support": 250, "resistance": 260, "targets": [270, 280]},
+def get_news():
+    # مكان تجيب أخبارك (مثال ثابت)
+    news = [
+        {
+            "title": "Stock Exchanges Urge Regulators To Crack Down on 'Tokenised Stocks'",
+            "url": "https://news.slashdot.org/story/25/08/25/162240/stock-exchanges-urge-regulators-to-crack-down-on-tokenised-stocks"
+        }
     ]
-    alerts = []
-    for stock in movers:
-        text = (
-            f"🚀 <b>{stock['symbol']}</b>\n"
-            f"💵 السعر: {stock['price']}\n"
-            f"📉 الدعم: {stock['support']}\n"
-            f"📈 المقاومة: {stock['resistance']}\n"
-            f"🎯 الأهداف: {', '.join(map(str, stock['targets']))}"
-        )
-        alerts.append(text)
-    return alerts
+    msgs = []
+    for n in news:
+        title_ar = translate_text(n["title"])
+        msgs.append(f"📰 {title_ar}\n📎 {n['url']}")
+    return msgs
 
-# التشغيل
+def get_liquidity(symbol):
+    try:
+        tk = yf.Ticker(symbol)
+        info = tk.fast_info
+        price = float(info['last_price']) if 'last_price' in info else None
+
+        hist = tk.history(period="60d", interval="1d")
+        if hist.empty: return None
+
+        vol_today = int(hist["Volume"].iloc[-1])
+        avg20 = int(hist["Volume"].tail(20).mean())
+        rvol = round(vol_today/avg20, 2) if avg20 else None
+        turnover = round((price or 0) * vol_today, 2) if price else None
+
+        df = hist.copy()
+        df["SMA10"] = df["Close"].rolling(10).mean()
+        df["SMA50"] = df["Close"].rolling(50).mean()
+        df["SMA200"] = df["Close"].rolling(200).mean()
+        recent = df.tail(20)
+        resistance = round(recent["High"].max(), 2)
+        support = round(recent["Low"].min(), 2)
+
+        last = df.iloc[-1]
+        return {
+            "price": price,
+            "volume": vol_today,
+            "avg20": avg20,
+            "rvol": rvol,
+            "turnover": turnover,
+            "sma10": round(last["SMA10"], 2) if pd.notna(last["SMA10"]) else None,
+            "sma50": round(last["SMA50"], 2) if pd.notna(last["SMA50"]) else None,
+            "sma200": round(last["SMA200"], 2) if pd.notna(last["SMA200"]) else None,
+            "support": support,
+            "resistance": resistance
+        }
+    except Exception:
+        return None
+
+def format_stock_msg(symbol):
+    liq = get_liquidity(symbol)
+    if not liq:
+        return f"⚠️ ما قدرت أجيب بيانات {symbol}."
+
+    msg = f"""
+🚀 {symbol}
+💵 السعر: {liq['price']}
+📊 حجم اليوم: {liq['volume']:,}
+📈 متوسط 20 يوم: {liq['avg20']:,}
+🔥 RVOL: {liq['rvol']}x
+💰 قيمة التداول: {liq['turnover']:,}
+
+🧭 دعم: {liq['support']} | مقاومة: {liq['resistance']}
+SMA10: {liq['sma10']} | SMA50: {liq['sma50']} | SMA200: {liq['sma200']}
+"""
+    return msg
+
 def main():
-    sent_news = set()
-    while True:
-        # أخبار
-        news = get_stock_news()
-        for n in news:
-            if n not in sent_news:
-                send_message(n)
-                sent_news.add(n)
+    # الأخبار
+    for n in get_news():
+        send_message(n)
 
-        # أسهم متحركة
-        movers_alerts = get_movers()
-        for alert in movers_alerts:
-            send_message(alert)
+    # السيولة للأسهم
+    for sym in TICKERS:
+        send_message(format_stock_msg(sym))
 
-        time.sleep(300)  # يحدث كل 5 دقايق
-
-if _name_ == "_main_":
+if __name__ == "__main__":
     main()
