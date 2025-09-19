@@ -1,0 +1,6 @@
+yfinance
+pandas
+pandas_ta
+googletrans==4.0.0rc1
+lxml
+requests
