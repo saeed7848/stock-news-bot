@@ -1,4 +1,4 @@
-# bot.py — زخم + خبر مترجم + مستويات + إرسال تلقائي
+# bot.py — مراقبة S&P500 + Nasdaq100 (RSI + دعم/مقاومة + أخبار مترجمة)
 
 import time
 import requests
@@ -9,29 +9,17 @@ from googletrans import Translator
 from datetime import datetime, timezone
 
 # ================== الإعدادات ==================
-TOKEN        = "توكن_بوت_التليجرام"        # ضع التوكن هنا
-CHAT_ID      = "-100xxxxxxxxxxxx"          # آي دي القناة يبدأ بـ -100
-TICKERS      = ["AAPL", "TSLA", "NVDA"]    # الأسهم المراد متابعتها
-NEWSAPI_KEY  = "مفتاح_NewsAPI"             # مفتاح NewsAPI
-INTERVAL_MIN = 5                           # كل كم دقيقة يعيد الفحص
+TOKEN        = "توكن_بوت_التليجرام"
+CHAT_ID      = "-100xxxxxxxxxxxx"     # آي دي القناة
+NEWSAPI_KEY  = "مفتاح_NewsAPI"
+INTERVAL_MIN = 10                     # كل كم دقيقة يفحص
 RSI_MIN      = 40
 RSI_MAX      = 70
+BATCH_SIZE   = 50                     # كم سهم يفحص في كل دورة (لتخفيف الضغط)
 # ==============================================
 
 TG_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 translator = Translator()
-
-COMPANY_BY_SYMBOL = {
-    "AAPL": "Apple",
-    "TSLA": "Tesla",
-    "NVDA": "NVIDIA",
-    "MSFT": "Microsoft",
-    "AMD": "Advanced Micro Devices",
-    "AMZN": "Amazon",
-    "META": "Meta",
-    "GOOGL": "Alphabet",
-    "NFLX": "Netflix",
-}
 
 # ====== إرسال تيليجرام ======
 def send_message(text: str):
@@ -47,10 +35,9 @@ def send_message(text: str):
 # ====== جلب خبر مترجم ======
 def news_for_symbol(symbol: str):
     try:
-        q = f'"{symbol}" OR "{COMPANY_BY_SYMBOL.get(symbol, symbol)}" stocks'
         url = "https://newsapi.org/v2/everything"
         params = {
-            "q": q,
+            "q": symbol,
             "pageSize": 1,
             "sortBy": "publishedAt",
             "language": "en",
@@ -63,99 +50,90 @@ def news_for_symbol(symbol: str):
         a = arts[0]
         title = a.get("title") or ""
         desc  = a.get("description") or ""
-        link  = a.get("url") or ""
         src   = (a.get("source") or {}).get("name", "")
+        link  = a.get("url") or ""
 
-        # ترجم
         try:
             title_ar = translator.translate(title, dest="ar").text if title else ""
             desc_ar  = translator.translate(desc,  dest="ar").text if desc else ""
-        except Exception:
+        except:
             title_ar, desc_ar = title, desc
 
-        ts = ""
-        if a.get("publishedAt"):
-            try:
-                dt = datetime.fromisoformat(a["publishedAt"].replace("Z","+00:00")).astimezone(timezone.utc)
-                ts = dt.strftime("%Y-%m-%d %H:%M UTC")
-            except Exception:
-                pass
-
-        block = f"📰 خبر متعلق بـ {symbol}\nالعنوان: {title_ar}"
-        if desc_ar: block += f"\nالتفاصيل: {desc_ar}"
-        if ts:      block += f"\n📅 الوقت: {ts}"
-        if link:    block += f"\n🔗 {link}"
+        block = f"📰 خبر {symbol}\n{title_ar}"
+        if desc_ar: block += f"\n{desc_ar}"
         if src:     block += f"\n📌 المصدر: {src}"
+        if link:    block += f"\n🔗 {link}"
         return block
-    except Exception as e:
-        print("news error:", e)
+    except:
         return None
 
 # ====== تحليل السهم ======
 def analyze_stock(symbol: str):
     try:
-        tk = yf.Ticker(symbol)
-
-        # إطار 15 دقيقة للزخم
-        df = tk.history(period="7d", interval="15m", auto_adjust=False)
-        if df.empty or len(df) < 50:
+        df = yf.download(symbol, period="1mo", interval="1d", progress=False)
+        if df.empty:
             return None
-        price = float(df["Close"].iloc[-1])
-
+        price = df["Close"].iloc[-1]
         rsi = ta.rsi(df["Close"], length=14).iloc[-1]
         if pd.isna(rsi):
             return None
-        if not (RSI_MIN <= float(rsi) <= RSI_MAX):
+        if not (RSI_MIN <= rsi <= RSI_MAX):
             return None
 
-        # إطار يومي للدعم/المقاومة
-        dfd = tk.history(period="7d", interval="1d", auto_adjust=False)
-        if dfd.empty:
-            return None
-        resistance = float(dfd["High"].max())
-        support    = float(dfd["Low"].min())
-
-        # أهداف ووقف
+        support = df["Low"].tail(20).min()
+        resistance = df["High"].tail(20).max()
         target1 = round(price * 1.05, 2)
         target2 = round(price * 1.10, 2)
-        stop    = round(support, 2)
 
-        # خبر
         news_block = news_for_symbol(symbol)
 
-        # صياغة الرسالة
-        lines = [
-            f"🚀 سهم: {symbol}",
-            f"💵 السعر الآن: {round(price,2)}",
-            f"📈 المقاومة: {round(resistance,2)}",
-            f"📉 الدعم (وقف): {round(support,2)}",
-            f"🎯 الهدف 1: {target1}",
-            f"🎯 الهدف 2: {target2}",
-            f"📊 RSI(14): {round(float(rsi),2)} ضمن {RSI_MIN}-{RSI_MAX}",
-        ]
+        msg = f"""
+🚀 {symbol}
+💵 السعر: {round(price,2)}
+📈 مقاومة: {round(resistance,2)}
+📉 دعم (وقف): {round(support,2)}
+🎯 هدف1: {target1} | 🎯 هدف2: {target2}
+📊 RSI: {round(rsi,2)}
+"""
         if news_block:
-            lines += ["—", news_block]
-
-        return "\n".join(lines)
-
-    except Exception as e:
-        print("analyze error:", symbol, e)
+            msg += "\n—\n" + news_block
+        return msg.strip()
+    except:
         return None
 
-# ====== دورة واحدة ======
+# ====== جلب قوائم المؤشرات ======
+def get_sp500_tickers():
+    try:
+        table = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+        return table[0]["Symbol"].tolist()
+    except:
+        return []
+
+def get_nasdaq100_tickers():
+    try:
+        table = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")
+        return table[4]["Ticker"].tolist()
+    except:
+        return []
+
+# ====== تشغيل دورة واحدة ======
 def run_once():
-    found = False
-    for sym in TICKERS:
+    tickers = list(set(get_sp500_tickers() + get_nasdaq100_tickers()))
+    if not tickers:
+        send_message("⚠️ تعذر جلب قائمة الأسهم.")
+        return
+    found = 0
+    for sym in tickers[:BATCH_SIZE]:  # دفعة أولى
         msg = analyze_stock(sym)
         if msg:
             send_message(msg)
-            found = True
-    if not found:
-        send_message(f"ℹ️ لا توجد أسهم تحقق RSI بين {RSI_MIN}-{RSI_MAX} حالياً.")
+            found += 1
+    if found == 0:
+        send_message("ℹ️ لا توجد أسهم تحقق شروط الزخم حالياً.")
 
-# ====== التشغيل التلقائي ======
+# ====== التشغيل المستمر ======
 def main():
-    send_message("✅ البوت بدأ العمل (زخم + خبر مترجم + مستويات)")
+    send_message("✅ البوت بدأ (S&P500 + Nasdaq100)")
     while True:
         run_once()
         time.sleep(INTERVAL_MIN * 60)
