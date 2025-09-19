@@ -1,100 +1,123 @@
+import time
 import requests
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 from googletrans import Translator
-from config import TOKEN, CHAT_ID, TICKERS
+from datetime import datetime, timezone
 
-BASE_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+from config import TOKEN, CHAT_ID, TICKERS, NEWSAPI_KEY, INTERVAL_MIN, RSI_MIN, RSI_MAX
+
+TG_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 translator = Translator()
 
-def send_message(msg):
-    requests.post(BASE_URL, data={"chat_id": CHAT_ID, "text": msg})
+COMPANY_BY_SYMBOL = {
+    "AAPL": "Apple", "TSLA": "Tesla", "NVDA": "NVIDIA",
+    "MSFT": "Microsoft", "AMD": "Advanced Micro Devices",
+}
 
-def translate_text(text):
+def send_message(text: str):
     try:
-        return translator.translate(text, src="en", dest="ar").text
-    except:
-        return text
+        requests.post(TG_URL, data={"chat_id": CHAT_ID, "text": text})
+    except Exception as e:
+        print("Telegram send error:", e)
 
-def get_news():
-    # مكان تجيب أخبارك (مثال ثابت)
-    news = [
-        {
-            "title": "Stock Exchanges Urge Regulators To Crack Down on 'Tokenised Stocks'",
-            "url": "https://news.slashdot.org/story/25/08/25/162240/stock-exchanges-urge-regulators-to-crack-down-on-tokenised-stocks"
-        }
-    ]
-    msgs = []
-    for n in news:
-        title_ar = translate_text(n["title"])
-        msgs.append(f"📰 {title_ar}\n📎 {n['url']}")
-    return msgs
-
-def get_liquidity(symbol):
+def news_for_symbol(symbol: str):
     try:
-        tk = yf.Ticker(symbol)
-        info = tk.fast_info
-        price = float(info['last_price']) if 'last_price' in info else None
-
-        hist = tk.history(period="60d", interval="1d")
-        if hist.empty: return None
-
-        vol_today = int(hist["Volume"].iloc[-1])
-        avg20 = int(hist["Volume"].tail(20).mean())
-        rvol = round(vol_today/avg20, 2) if avg20 else None
-        turnover = round((price or 0) * vol_today, 2) if price else None
-
-        df = hist.copy()
-        df["SMA10"] = df["Close"].rolling(10).mean()
-        df["SMA50"] = df["Close"].rolling(50).mean()
-        df["SMA200"] = df["Close"].rolling(200).mean()
-        recent = df.tail(20)
-        resistance = round(recent["High"].max(), 2)
-        support = round(recent["Low"].min(), 2)
-
-        last = df.iloc[-1]
-        return {
-            "price": price,
-            "volume": vol_today,
-            "avg20": avg20,
-            "rvol": rvol,
-            "turnover": turnover,
-            "sma10": round(last["SMA10"], 2) if pd.notna(last["SMA10"]) else None,
-            "sma50": round(last["SMA50"], 2) if pd.notna(last["SMA50"]) else None,
-            "sma200": round(last["SMA200"], 2) if pd.notna(last["SMA200"]) else None,
-            "support": support,
-            "resistance": resistance
+        q = f'"{symbol}" OR "{COMPANY_BY_SYMBOL.get(symbol, symbol)}" stocks'
+        url = "https://newsapi.org/v2/everything"
+        params = {
+            "q": q, "pageSize": 1, "sortBy": "publishedAt",
+            "language": "en", "apiKey": NEWSAPI_KEY
         }
-    except Exception:
+        r = requests.get(url, params=params, timeout=15)
+        arts = (r.json() or {}).get("articles") or []
+        if not arts: return None
+        a = arts[0]
+        title = a.get("title") or ""
+        desc  = a.get("description") or ""
+        link  = a.get("url") or ""
+        src   = (a.get("source") or {}).get("name", "")
+
+        # ترجم
+        try:
+            title_ar = translator.translate(title, dest="ar").text if title else ""
+            desc_ar  = translator.translate(desc,  dest="ar").text if desc  else ""
+        except Exception:
+            title_ar, desc_ar = title, desc
+
+        ts = ""
+        if a.get("publishedAt"):
+            try:
+                dt = datetime.fromisoformat(a["publishedAt"].replace("Z","+00:00")).astimezone(timezone.utc)
+                ts = dt.strftime("%Y-%m-%d %H:%M UTC")
+            except Exception:
+                pass
+
+        block = f"📰 خبر متعلق بـ {symbol}\nالعنوان: {title_ar}"
+        if desc_ar: block += f"\nالتفاصيل: {desc_ar}"
+        if ts:      block += f"\n📅 الوقت: {ts}"
+        if link:    block += f"\n🔗 {link}"
+        if src:     block += f"\n📌 المصدر: {src}"
+        return block
+    except Exception as e:
+        print("news error:", e)
         return None
 
-def format_stock_msg(symbol):
-    liq = get_liquidity(symbol)
-    if not liq:
-        return f"⚠️ ما قدرت أجيب بيانات {symbol}."
+def analyze_stock(symbol: str):
+    try:
+        tk  = yf.Ticker(symbol)
+        # إطار 15م لقياس RSI أسبوعياً (زخم)
+        df  = tk.history(period="7d", interval="15m", auto_adjust=False)
+        if df.empty or len(df) < 50: return None
+        price = float(df["Close"].iloc[-1])
 
-    msg = f"""
-🚀 {symbol}
-💵 السعر: {liq['price']}
-📊 حجم اليوم: {liq['volume']:,}
-📈 متوسط 20 يوم: {liq['avg20']:,}
-🔥 RVOL: {liq['rvol']}x
-💰 قيمة التداول: {liq['turnover']:,}
+        rsi = ta.rsi(df["Close"], length=14).iloc[-1]
+        if pd.isna(rsi): return None
+        if not (RSI_MIN <= float(rsi) <= RSI_MAX): return None
 
-🧭 دعم: {liq['support']} | مقاومة: {liq['resistance']}
-SMA10: {liq['sma10']} | SMA50: {liq['sma50']} | SMA200: {liq['sma200']}
-"""
-    return msg
+        # دعم/مقاومة من آخر 7 أيام يومية
+        dfd = tk.history(period="7d", interval="1d", auto_adjust=False)
+        if dfd.empty: return None
+        resistance = float(dfd["High"].max())
+        support    = float(dfd["Low"].min())
+
+        target1 = round(price * 1.05, 2)
+        target2 = round(price * 1.10, 2)
+        stop    = round(support, 2)
+
+        news_block = news_for_symbol(symbol)  # قد تكون None
+
+        lines = [
+            f"🚀 سهم: {symbol}",
+            f"💵 السعر الآن: {round(price,2)}",
+            f"📈 المقاومة: {round(resistance,2)}",
+            f"📉 الدعم (وقف): {round(support,2)}",
+            f"🎯 الهدف 1: {target1}",
+            f"🎯 الهدف 2: {target2}",
+            f"📊 RSI(14): {round(float(rsi),2)} ضمن {RSI_MIN}-{RSI_MAX}",
+        ]
+        if news_block:
+            lines += ["—", news_block]
+        return "\n".join(lines)
+    except Exception as e:
+        print("analyze error:", symbol, e)
+        return None
+
+def run_once():
+    found = False
+    for sym in TICKERS:
+        msg = analyze_stock(sym)
+        if msg:
+            send_message(msg); found = True
+    if not found:
+        send_message(f"ℹ️ لا توجد أسهم تحقق RSI بين {RSI_MIN}-{RSI_MAX} حالياً.")
 
 def main():
-    # الأخبار
-    for n in get_news():
-        send_message(n)
-
-    # السيولة للأسهم
-    for sym in TICKERS:
-        send_message(format_stock_msg(sym))
+    send_message("✅ البوت بدأ العمل (زخم + خبر + مستويات)")
+    while True:
+        run_once()
+        time.sleep(int(INTERVAL_MIN) * 60)
 
 if __name__ == "__main__":
     main()
