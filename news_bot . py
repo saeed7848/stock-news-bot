@@ -1,3 +1,5 @@
+# bot.py — زخم + خبر مترجم + مستويات + إرسال تلقائي
+
 import time
 import requests
 import yfinance as yf
@@ -6,33 +8,58 @@ import pandas_ta as ta
 from googletrans import Translator
 from datetime import datetime, timezone
 
-from config import TOKEN, CHAT_ID, TICKERS, NEWSAPI_KEY, INTERVAL_MIN, RSI_MIN, RSI_MAX
+# ================== الإعدادات ==================
+TOKEN        = "توكن_بوت_التليجرام"        # ضع التوكن هنا
+CHAT_ID      = "-100xxxxxxxxxxxx"          # آي دي القناة يبدأ بـ -100
+TICKERS      = ["AAPL", "TSLA", "NVDA"]    # الأسهم المراد متابعتها
+NEWSAPI_KEY  = "مفتاح_NewsAPI"             # مفتاح NewsAPI
+INTERVAL_MIN = 5                           # كل كم دقيقة يعيد الفحص
+RSI_MIN      = 40
+RSI_MAX      = 70
+# ==============================================
 
 TG_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 translator = Translator()
 
 COMPANY_BY_SYMBOL = {
-    "AAPL": "Apple", "TSLA": "Tesla", "NVDA": "NVIDIA",
-    "MSFT": "Microsoft", "AMD": "Advanced Micro Devices",
+    "AAPL": "Apple",
+    "TSLA": "Tesla",
+    "NVDA": "NVIDIA",
+    "MSFT": "Microsoft",
+    "AMD": "Advanced Micro Devices",
+    "AMZN": "Amazon",
+    "META": "Meta",
+    "GOOGL": "Alphabet",
+    "NFLX": "Netflix",
 }
 
+# ====== إرسال تيليجرام ======
 def send_message(text: str):
     try:
-        requests.post(TG_URL, data={"chat_id": CHAT_ID, "text": text})
+        requests.post(TG_URL, data={
+            "chat_id": CHAT_ID,
+            "text": text,
+            "disable_web_page_preview": True
+        }, timeout=15)
     except Exception as e:
         print("Telegram send error:", e)
 
+# ====== جلب خبر مترجم ======
 def news_for_symbol(symbol: str):
     try:
         q = f'"{symbol}" OR "{COMPANY_BY_SYMBOL.get(symbol, symbol)}" stocks'
         url = "https://newsapi.org/v2/everything"
         params = {
-            "q": q, "pageSize": 1, "sortBy": "publishedAt",
-            "language": "en", "apiKey": NEWSAPI_KEY
+            "q": q,
+            "pageSize": 1,
+            "sortBy": "publishedAt",
+            "language": "en",
+            "apiKey": NEWSAPI_KEY
         }
         r = requests.get(url, params=params, timeout=15)
         arts = (r.json() or {}).get("articles") or []
-        if not arts: return None
+        if not arts:
+            return None
         a = arts[0]
         title = a.get("title") or ""
         desc  = a.get("description") or ""
@@ -42,7 +69,7 @@ def news_for_symbol(symbol: str):
         # ترجم
         try:
             title_ar = translator.translate(title, dest="ar").text if title else ""
-            desc_ar  = translator.translate(desc,  dest="ar").text if desc  else ""
+            desc_ar  = translator.translate(desc,  dest="ar").text if desc else ""
         except Exception:
             title_ar, desc_ar = title, desc
 
@@ -64,30 +91,39 @@ def news_for_symbol(symbol: str):
         print("news error:", e)
         return None
 
+# ====== تحليل السهم ======
 def analyze_stock(symbol: str):
     try:
-        tk  = yf.Ticker(symbol)
-        # إطار 15م لقياس RSI أسبوعياً (زخم)
-        df  = tk.history(period="7d", interval="15m", auto_adjust=False)
-        if df.empty or len(df) < 50: return None
+        tk = yf.Ticker(symbol)
+
+        # إطار 15 دقيقة للزخم
+        df = tk.history(period="7d", interval="15m", auto_adjust=False)
+        if df.empty or len(df) < 50:
+            return None
         price = float(df["Close"].iloc[-1])
 
         rsi = ta.rsi(df["Close"], length=14).iloc[-1]
-        if pd.isna(rsi): return None
-        if not (RSI_MIN <= float(rsi) <= RSI_MAX): return None
+        if pd.isna(rsi):
+            return None
+        if not (RSI_MIN <= float(rsi) <= RSI_MAX):
+            return None
 
-        # دعم/مقاومة من آخر 7 أيام يومية
+        # إطار يومي للدعم/المقاومة
         dfd = tk.history(period="7d", interval="1d", auto_adjust=False)
-        if dfd.empty: return None
+        if dfd.empty:
+            return None
         resistance = float(dfd["High"].max())
         support    = float(dfd["Low"].min())
 
+        # أهداف ووقف
         target1 = round(price * 1.05, 2)
         target2 = round(price * 1.10, 2)
         stop    = round(support, 2)
 
-        news_block = news_for_symbol(symbol)  # قد تكون None
+        # خبر
+        news_block = news_for_symbol(symbol)
 
+        # صياغة الرسالة
         lines = [
             f"🚀 سهم: {symbol}",
             f"💵 السعر الآن: {round(price,2)}",
@@ -99,25 +135,30 @@ def analyze_stock(symbol: str):
         ]
         if news_block:
             lines += ["—", news_block]
+
         return "\n".join(lines)
+
     except Exception as e:
         print("analyze error:", symbol, e)
         return None
 
+# ====== دورة واحدة ======
 def run_once():
     found = False
     for sym in TICKERS:
         msg = analyze_stock(sym)
         if msg:
-            send_message(msg); found = True
+            send_message(msg)
+            found = True
     if not found:
         send_message(f"ℹ️ لا توجد أسهم تحقق RSI بين {RSI_MIN}-{RSI_MAX} حالياً.")
 
+# ====== التشغيل التلقائي ======
 def main():
-    send_message("✅ البوت بدأ العمل (زخم + خبر + مستويات)")
+    send_message("✅ البوت بدأ العمل (زخم + خبر مترجم + مستويات)")
     while True:
         run_once()
-        time.sleep(int(INTERVAL_MIN) * 60)
+        time.sleep(INTERVAL_MIN * 60)
 
 if __name__ == "__main__":
     main()
