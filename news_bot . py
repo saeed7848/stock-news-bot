@@ -1,0 +1,59 @@
+import requests
+import time
+import logging
+from config import TELEGRAM_TOKEN, CHAT_ID, NEWS_API
+
+logging.basicConfig(level=logging.INFO)
+
+def send_message(text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {"chat_id": CHAT_ID, "text": text}
+    try:
+        r = requests.post(url, data=data)
+        if r.status_code != 200:
+            logging.error(f"خطأ في الإرسال: {r.text}")
+    except Exception as e:
+        logging.error(f"استثناء: {e}")
+
+def get_stock_news():
+    try:
+        r = requests.get(NEWS_API)
+        articles = r.json().get("articles", [])
+        news_list = []
+        for a in articles[:5]:
+            title = a.get("title", "")
+            url = a.get("url", "")
+            news_list.append(f"📰 {title}\n{url}")
+        return news_list
+    except Exception as e:
+        logging.error(f"خطأ في الأخبار: {e}")
+        return []
+
+def get_movers():
+    movers = [
+        {"symbol": "AAPL", "price": 180.5, "resistance": 181},
+        {"symbol": "TSLA", "price": 255.2, "resistance": 260},
+    ]
+    alerts = []
+    for stock in movers:
+        if stock["price"] >= stock["resistance"]:
+            alerts.append(f"🚀 {stock['symbol']} اخترق المقاومة {stock['resistance']}$ (السعر الآن {stock['price']}$)")
+    return alerts
+
+def main():
+    sent_news = set()
+    while True:
+        news = get_stock_news()
+        for n in news:
+            if n not in sent_news:
+                send_message(n)
+                sent_news.add(n)
+
+        movers_alerts = get_movers()
+        for alert in movers_alerts:
+            send_message(alert)
+
+        time.sleep(60)
+
+if _name_ == "_main_":
+    main()
