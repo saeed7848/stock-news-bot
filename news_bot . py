@@ -5,55 +5,68 @@ from config import TELEGRAM_TOKEN, CHAT_ID, NEWS_API
 
 logging.basicConfig(level=logging.INFO)
 
+# إرسال رسالة لتليجرام
 def send_message(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": text}
+    data = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
     try:
         r = requests.post(url, data=data)
         if r.status_code != 200:
             logging.error(f"خطأ في الإرسال: {r.text}")
     except Exception as e:
-        logging.error(f"استثناء: {e}")
+        logging.error(f"استثناء في الإرسال: {e}")
 
+# جلب الأخبار من NewsAPI وترجمتها
 def get_stock_news():
     try:
         r = requests.get(NEWS_API)
         articles = r.json().get("articles", [])
         news_list = []
-        for a in articles[:5]:
+        for a in articles[:3]:  # آخر 3 أخبار
             title = a.get("title", "")
             url = a.get("url", "")
-            news_list.append(f"📰 {title}\n{url}")
+            source = a.get("source", {}).get("name", "")
+            news_list.append(f"📰 <b>{title}</b>\n📌 المصدر: {source}\n🔗 {url}")
         return news_list
     except Exception as e:
-        logging.error(f"خطأ في الأخبار: {e}")
+        logging.error(f"خطأ في جلب الأخبار: {e}")
         return []
 
+# أسهم متحركة (أمثلة، ممكن تربطها بـ API السوق)
 def get_movers():
     movers = [
-        {"symbol": "AAPL", "price": 180.5, "resistance": 181},
-        {"symbol": "TSLA", "price": 255.2, "resistance": 260},
+        {"symbol": "AAPL", "price": 180.5, "support": 178, "resistance": 182, "targets": [185, 190]},
+        {"symbol": "TSLA", "price": 255.2, "support": 250, "resistance": 260, "targets": [270, 280]},
     ]
     alerts = []
     for stock in movers:
-        if stock["price"] >= stock["resistance"]:
-            alerts.append(f"🚀 {stock['symbol']} اخترق المقاومة {stock['resistance']}$ (السعر الآن {stock['price']}$)")
+        text = (
+            f"🚀 <b>{stock['symbol']}</b>\n"
+            f"💵 السعر: {stock['price']}\n"
+            f"📉 الدعم: {stock['support']}\n"
+            f"📈 المقاومة: {stock['resistance']}\n"
+            f"🎯 الأهداف: {', '.join(map(str, stock['targets']))}"
+        )
+        alerts.append(text)
     return alerts
 
+# التشغيل
 def main():
     sent_news = set()
     while True:
+        # أخبار
         news = get_stock_news()
         for n in news:
             if n not in sent_news:
                 send_message(n)
                 sent_news.add(n)
 
+        # أسهم متحركة
         movers_alerts = get_movers()
         for alert in movers_alerts:
             send_message(alert)
 
-        time.sleep(60)
+        time.sleep(300)  # يحدث كل 5 دقايق
 
 if _name_ == "_main_":
     main()
