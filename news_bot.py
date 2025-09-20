@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 # ================== الإعدادات ==================
 TOKEN        = "8230094281:AAEzAJ9GsK5kGqAxYBtH4UdJc2nDQ7kk4lQ"
-CHAT_ID      = "-100xxxxxxxxxxxx"     # آي دي القناة
+CHAT_ID      = "-1003055214239"     # آي دي القناة
 NEWSAPI_KEY  = "مفتاح_NewsAPI"
 INTERVAL_MIN = 10                     # كل كم دقيقة يفحص
 RSI_MIN      = 40
