@@ -20,7 +20,11 @@ BATCH_SIZE   = 50                     # كم سهم يفحص في كل دورة 
 
 TG_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 translator = Translator()
-
+requests.post(TG_URL, data={
+    "chat_id": CHAT_ID,
+    "text": "🚀 البوت شغال بنجاح! ✅",
+    "disable_web_page_preview": True
+}, timeout=15)
 # ====== إرسال تيليجرام ======
 def send_message(text: str):
     try:
