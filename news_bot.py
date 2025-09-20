@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 # ================== الإعدادات ==================
 TOKEN        = "8230094281:AAEzAJ9GsK5kGqAxYBtH4UdJc2nDQ7kk4lQ"
 CHAT_ID      = "-1003055214239"     # آي دي القناة
-NEWSAPI_KEY  = "مفتاح_NewsAPI"
+NEWSAPI_KEY  = "277a6d15a59b40d6ac43db37ac7627fa"
 INTERVAL_MIN = 10                     # كل كم دقيقة يفحص
 RSI_MIN      = 40
 RSI_MAX      = 70
