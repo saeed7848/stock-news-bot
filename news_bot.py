@@ -119,11 +119,38 @@ def get_nasdaq100_tickers():
         return table[4]["Ticker"].tolist()
     except:
         return []
+# === جلب الأسهم المتحركة اليوم من Yahoo Finance ===
+def _yf_list(scr_id: str, count: int = 100):
+    try:
+        url = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
+        params = {
+            "scrIds": scr_id,     # day_gainers / day_losers / most_actives
+            "count": count,
+            "formatted": "false",
+            "lang": "en-US",
+            "region": "US",
+        }
+        r = requests.get(url, params=params, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        data = r.json()
+        quotes = (((data.get("finance") or {}).get("result") or [])[0] or {}).get("quotes") or []
+        return [q.get("symbol") for q in quotes if q.get("symbol")]
+    except Exception as e:
+        print("yf list error:", e)
+        return []
 
+def get_movers():
+    try:
+        syms = set()
+        for scr in ["day_gainers", "day_losers", "most_actives"]:
+            syms.update(_yf_list(scr, 100))
+        # نكتفي بعدد معقول (يعتمد على BATCH_SIZE عندك)
+        return list(syms)[:BATCH_SIZE]
+    except Exception as e:
+        print("get_movers error:", e)
+        return []
 # ====== تشغيل دورة واحدة ======
 def run_once():
-    tickers = list(set(get_sp500_tickers() + get_nasdaq100_tickers()))
-    if not tickers:
+tickers = get_movers()    if not tickers:
         send_message("⚠️ تعذر جلب قائمة الأسهم.")
         return
     found = 0
